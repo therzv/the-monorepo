@@ -1,0 +1,137 @@
+pipeline {
+    agent {
+        label useAgent
+    }
+
+    environment {
+        CI                      = "true"
+        REGISTRY_URL            = "registry.attn.sg/microservice"
+        SERVICE_NAME            = "${JOB_NAME.split('/')[0]}"
+        OVERRIDE_SERVICE_NAME   = "docs"
+        IMAGE_TAG               = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+        DOCKER_PATH             = "apps/${SERVICE_NAME}/Dockerfile"
+        HELM_PATH               = "turborepo-helm-chart-docs"
+        HELM_NAMESPACE          = "docs"
+        IMAGE_NAME              = "${REGISTRY_URL}/${OVERRIDE_SERVICE_NAME}"
+    }
+
+    stages {
+        stage('Build') {
+            when {
+                anyOf { changeset "**/${SERVICE_NAME}/**"; changeset "**/app/docs/**";  }
+            }
+
+            steps {
+                script {
+                    if (GIT_BRANCH == 'main') {
+                        echo "[+] Building Docker Image for ${GIT_BRANCH}"
+                        sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f ${DOCKER_PATH} ."
+                    
+                        echo "[+] Pushing Image to ${IMAGE_NAME}:${APP_VERSION}"
+                        sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
+
+                    } else if(GIT_BRANCH == 'staging'){
+                        echo "[+] Building Image with tag ${IMAGE_NAME}:${IMAGE_TAG}-stg"
+                        sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG}-stg -f ${DOCKER_PATH} ."
+
+                        echo "[+] Pushing Image to ${IMAGE_NAME}:${IMAGE_TAG}-stg"
+                        sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}-stg"
+
+                    } else if(GIT_BRANCH == 'development'){
+                        echo "[+] Building Image with tag ${IMAGE_NAME}:${IMAGE_TAG}-dev"
+                        sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG}-dev -f ${DOCKER_PATH} ."
+
+                        echo "[+] Pushing Image to ${IMAGE_NAME}:${IMAGE_TAG}-dev"
+                        sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}-dev"
+                    }
+                }
+            }
+        }
+
+
+        stage('Deploy Development') {
+            when {
+                anyOf { changeset "**/${SERVICE_NAME}/**"; changeset "**/apps/docs/**";  }
+                
+                branch 'development'
+            }
+            steps {
+                script {    
+                    echo "[+] Deploying Helm Chart for ${GIT_BRANCH}"
+                    sh "kubectl config use-context development"
+                    sh "helm upgrade --install ${OVERRIDE_SERVICE_NAME} -f ${HELM_PATH}/values.yaml --set image.imagetag=${IMAGE_TAG}-dev -n ${HELM_NAMESPACE} ${HELM_PATH}/"
+                }
+            }
+            post {
+                always {
+                    script {
+                        echo "[+] Deployment status"
+                        sh "kubectl rollout status deployment/${OVERRIDE_SERVICE_NAME} -n ${HELM_NAMESPACE} --timeout=1000s"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Staging') {
+            when {
+                anyOf { changeset "**/${SERVICE_NAME}/**"; changeset "**/apps/docs/**";  }
+                
+                branch 'staging'
+            }
+            steps {
+                script {    
+                    echo "[+] Deploying Helm Chart for ${GIT_BRANCH}"
+                    sh "kubectl config use-context staging"
+                    sh "helm upgrade --install ${OVERRIDE_SERVICE_NAME} -f ${HELM_PATH}/values-staging.yaml --set image.imagetag=${IMAGE_TAG}-stg -n ${HELM_NAMESPACE} ${HELM_PATH}/"
+                }
+            }
+            post {
+                always {
+                    script {
+                        echo "[+] Deployment status"
+                        sh "kubectl rollout status deployment/${OVERRIDE_SERVICE_NAME} -n ${HELM_NAMESPACE} --timeout=1000s"
+                    }
+                }
+            }
+        }
+
+
+        stage('Deploy Production') {
+            when {
+                anyOf { changeset "**/${SERVICE_NAME}/**"; changeset "**/apps/docs/**";  }                
+                branch 'master'
+            }
+            steps {
+                script {    
+                    echo "[+] Deploying Helm Chart for ${GIT_BRANCH}"
+                    sh "kubectl config use-context production"
+                    sh "helm upgrade --install ${OVERRIDE_SERVICE_NAME} -f ${HELM_PATH}/values-production.yaml --set image.imagetag=${APP_VERSION} -n ${HELM_NAMESPACE} ${HELM_PATH}/"
+                }
+            }
+            post {
+                always {
+                    script {
+                        echo "[+] Deployment status"
+                        sh "kubectl rollout status deployment/${OVERRIDE_SERVICE_NAME} -n ${HELM_NAMESPACE} --timeout=1000s"
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'I succeeded!'
+        }
+        unstable {
+            echo 'I am unstable :('
+        }
+        failure {
+            echo 'Failed :(('
+        }
+        cleanup {
+            echo "Clean up in post workspace."
+            cleanWs()
+        }
+    }
+}
