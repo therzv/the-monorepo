@@ -26,7 +26,8 @@ This turborepo uses [Yarn](https://classic.yarnpkg.com/) as a package manager. I
 ### Trade-offs you might have made, anything you left out, or what you might do
 - The Dockerfile i made is not tested yet, and i believe we still improve that Dockerfile
   (i put Dockerfile inside `web` and `docs` directory)
-
+- The Jenkins pipeline still handle CI/CD. Best practice for this is separating CI and CD process.
+  Might be Jenkins for CI and Argo for CD.
 
 
 ### differently if you were to spend additional time on the project.
